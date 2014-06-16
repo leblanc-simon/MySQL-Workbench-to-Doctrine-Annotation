@@ -55,6 +55,7 @@ class Schema:
         properties = ""
         getters = ""
         setters = ""
+        to_string = ""
 
         content += self.buildHeader(table)
 
@@ -62,8 +63,9 @@ class Schema:
             properties += self.buildProperties(column)
             getters += self.buildGetter(column)
             setters += self.buildSetter(column)
+            to_string += column.getToString()
 
-        content += properties + getters + setters
+        content += properties + to_string + getters + setters
 
         content += self.buildFooter(table)
 
@@ -375,6 +377,19 @@ class Column:
         result += "    {\n"
         result += "        $this->" + self.name + " = $" + self.name + ";\n"
         result += "        return $this;\n"
+        result += "    }\n\n"
+
+        return result
+
+    def getToString(self):
+        if self.name != 'name':
+            return ''
+
+        commentary = Comment(['Return the name when show the object', '@return string'])
+        result = commentary.build()
+        result += "    public function __toString()\n"
+        result += "    {\n"
+        result += "        return $this->getName() ?: '-';\n"
         result += "    }\n\n"
 
         return result
