@@ -344,7 +344,7 @@ class Column:
         if self._getPrecision():
             def_column["precision"] = self._getPrecision()
         if self._isUnsigned():
-            def_column["options"] = {"unsigned": True}
+            def_column["options"] = {"\"unsigned\"": True}
 
         annotations += [a_.get("Column", def_column)]
 
