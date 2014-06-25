@@ -8,8 +8,6 @@ import grt
 import mforms
 
 
-
-
 """
 Classe permettant de manipuler le schema de la base de données
 """
@@ -23,15 +21,13 @@ class Schema:
     def processing(self):
         try:
             for table in self.tables:
-                tab = Table(table)
+                tab = Table(table, self.namespace)
                 content = self.buildClass(tab)
                 self.write(content, tab)
-
             return True
         except:
             mforms.Utilities.show_error("", "Unexpected error : " + sys.exc_info()[0], "OK", "", "")
             return False
-
 
     """
     Ecrit le contenu de la classe dans un fichier
@@ -45,10 +41,10 @@ class Schema:
         file.write(content)
         file.close()
 
-
     """
     Contruction de la classe pour la table passée en argument
     """
+
     def buildClass(self, table):
         content = ""
         properties = ""
@@ -68,10 +64,10 @@ class Schema:
 
         return content
 
-
     """
     Contruction du header de la classe pour la table passée en argument
     """
+
     def buildHeader(self, table):
         content = "<?php\n\n"
         content += "namespace {0};\n\n".format(self.namespace)
@@ -83,8 +79,8 @@ class Schema:
             "",
             a_.get("Table", {
                 "name": table.name,
-                "indexes": [ index.toAnnotation("Index") for index in table.getIndexes() if index.isIndex() ],
-                "uniqueConstraints": [ index.toAnnotation("UniqueConstraint") for index in table.getIndexes() if index.isUnique() ],
+                "indexes": [index.toAnnotation("Index") for index in table.getIndexes() if index.isIndex()],
+                "uniqueConstraints": [index.toAnnotation("UniqueConstraint") for index in table.getIndexes() if index.isUnique()],
             }),
             a_.get("Entity")
         ], "")
@@ -95,17 +91,17 @@ class Schema:
 
         return content
 
-
     """
     Contruction du footer de la classe pour la table passée en argument
     """
+
     def buildFooter(self, table):
         return "\n}"
-
 
     """
     Contruction de la variable pour la colonne passée en argument
     """
+
     def buildProperties(self, column):
         return column.getAnnotations() + column.getProperty() + "\n"
 
@@ -113,24 +109,58 @@ class Schema:
     """
     Contruction du getter pour la colonne passée en argument
     """
+
     def buildGetter(self, column):
         return column.getGetter() + "\n"
-
 
     """
     Contruction du setter pour la colonne passée en argument
     """
+
     def buildSetter(self, column):
         return column.getSetter() + "\n"
 
 
+class ForeignKey:
+    def __init__(self, foreign_key, namespace):
+        self.foreign_key = foreign_key
+        self.namespace = namespace
+        self.name = foreign_key.columns[0].name
+        self.many_to_one = (foreign_key.many == 1)
+        self.columns = [column.name for column in foreign_key.columns]
+        self.table = foreign_key.columns[0].owner.name
+        self.origin_table = foreign_key.referencedTable.name
+        self.origin_columns = [column.name for column in foreign_key.referencedColumns]
+
+    def getLocals(self):
+        return self.columns
+
+    def getForeigns(self):
+        return [{'table': self.origin_table, 'column': column} for column in self.origin_columns]
+
+    def isManyToOne(self):
+        return self.many_to_one
+
+    def getName(self):
+        return self.name
+
+    def buildAnnotation(self):
+        annotations = []
+        annotations += [a_.get('ManyToOne', {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table),'inversedBy': self.table + 's'})]
+        annotations += [a_.get('JoinColumn', {'name': self.columns[0], 'referencedColumnName': self.origin_columns[0]})]
+        return annotations
+
+
 class Table:
-    def __init__(self, table):
+    def __init__(self, table, namespace):
         self.table = table
         self.name = table.name
+        self.namespace = namespace
         self.columns = []
         self.indexes = []
         self.primaries = []
+        self.foreigns = {}
+        self._initForeigns()
         self._initIndexes()
         self._initColumns()
 
@@ -146,14 +176,20 @@ class Table:
             col = Column(column)
             if column.name in self.primaries:
                 col.markAsPrimary()
+            if column.name in self.foreigns:
+                col.markAsForeign(self.foreigns[column.name])
             self.columns += [col]
+
+    def _initForeigns(self):
+        for key in self.table.foreignKeys:
+            fks = ForeignKey(key, self.namespace)
+            self.foreigns[key.columns[0].name] = fks
 
     def getColumns(self):
         return self.columns
 
     def getIndexes(self):
         return self.indexes
-
 
 
 class Index:
@@ -188,6 +224,8 @@ class Column:
         self.type = column.simpleType if column.simpleType else column.userType
         self.flags = column.flags
         self.is_primary = False
+        self.is_foreign = False
+        self.foreign_key = None
         self.doctrine_types = {
             "TINYINT": "integer",
             "SMALLINT": "integer",
@@ -299,7 +337,6 @@ class Column:
             "CHARACTER": "string"
         }
 
-
     def _getDoctrineType(self):
         return self.doctrine_types.get(self.type.name, "string")
 
@@ -309,10 +346,8 @@ class Column:
     def _isUnsigned(self):
         return "UNSIGNED" in self.column.flags
 
-
     def _isAutoIncrement(self):
         return self.column.autoIncrement == 1
-
 
     def _isNotNull(self):
         return self.column.isNotNull == 1
@@ -329,14 +364,16 @@ class Column:
     def markAsPrimary(self):
         self.is_primary = True
 
+    def markAsForeign(self, foreign_key):
+        self.is_foreign = True
+        self.foreign_key = foreign_key
+
     def getAnnotations(self):
         annotations = []
 
         if self.is_primary:
             annotations += [a_.get("Id")]
-
-        def_column = {}
-        def_column["type"] = self._getDoctrineType()
+        def_column = {"type": self._getDoctrineType()}
         if self._getLength():
             def_column["length"] = int(self._getLength())
         if self._isUnsigned():
@@ -350,12 +387,23 @@ class Column:
 
         if self._isAutoIncrement():
             annotations += [a_.get("GeneratedValue", {"strategy": "auto"})]
+        if self.is_foreign:
+            annotations = self.foreign_key.buildAnnotation()
 
         commentary = Comment(annotations)
         return commentary.build()
 
     def getProperty(self):
-        return "    protected $" + self.name + ";\n"
+        if self.is_foreign:
+            end = self.name[-4:]
+            long = len(self.name) - 4
+            if end[0] == 'y':
+                final_name = self.name[0:long] + 'ies'
+            else:
+                final_name = self.name[0:long+1] + 's'
+        else:
+            final_name = self.name
+        return "    protected $" + final_name + ";\n"
 
     def getGetter(self):
         commentary = Comment(["Get the value of " + self.name, "@return " + self._getPhpType()])
@@ -364,7 +412,6 @@ class Column:
         result += "    {\n"
         result += "        return $this->" + self.name + ";\n"
         result += "    }\n\n"
-
         return result
 
     def getSetter(self):
@@ -375,9 +422,7 @@ class Column:
         result += "        $this->" + self.name + " = $" + self.name + ";\n"
         result += "        return $this;\n"
         result += "    }\n\n"
-
         return result
-
 
 
 """
@@ -386,7 +431,6 @@ Classe permettant de générer des annotations
 class Annotation:
     def __init__(self):
         self.prefix = "@ORM\\"
-
 
     def get(self, name, value = None):
         def buildDict(datas):
@@ -412,10 +456,11 @@ class Annotation:
         return annotation
 
 
-
 """
 Classe permettant de générer des commentaires
 """
+
+
 class Comment:
     def __init__(self, comments, prefix = "    "):
         self.comments = comments
@@ -433,13 +478,14 @@ class Comment:
         return self.prefix + (" * " if content else "") + text + self.eol
 
 
-
 """
 Modification d'une chaine avec underscore en CamelCase
 
 :param:     string  value   La chaine à convertir
 :return:    string          La chaine au format CamelCase
 """
+
+
 def underscoreToCamelcase(value):
     def camelcase(): 
         yield str.lower
@@ -457,6 +503,7 @@ def underscoreToCamelcase(value):
 #
 #################################################
 a_ = Annotation()
+
 
 ModuleInfo = DefineModule(name="Doctrine Annotation", author="Simon Leblanc", version="1.0", description="Contains Plugin Doctrine")
 
