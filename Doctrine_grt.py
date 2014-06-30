@@ -17,13 +17,22 @@ class Schema:
         self.tables = schema.tables
         self.basepath = basepath
         self.namespace = namespace
+        self.dico_table = {}
+        self._initDico()
+
+    def _initDico(self):
+        for table in self.tables:
+            self.dico_table[table.name] = Table(table, self.namespace)
+        for table in self.dico_table.values():
+            for key in table.getForeignsKey().values():
+                if key.many_to_one:
+                    self.dico_table[key.origin_table].addInverted(key)
 
     def processing(self):
         try:
-            for table in self.tables:
-                tab = Table(table, self.namespace)
-                content = self.buildClass(tab)
-                self.write(content, tab)
+            for table in self.dico_table.values():
+                content = self.buildClass(table)
+                self.write(content, table)
             return True
         except:
             mforms.Utilities.show_error("", "Unexpected error : " + sys.exc_info()[0], "OK", "", "")
@@ -47,6 +56,7 @@ class Schema:
 
     def buildClass(self, table):
         content = ""
+        content_key = ""
         properties = ""
         getters = ""
         setters = ""
@@ -58,7 +68,12 @@ class Schema:
             getters += self.buildGetter(column)
             setters += self.buildSetter(column)
 
-        content += properties + getters + setters
+        for key in table.getInvertedKeys():
+            content_key += key.buildAnnotations()
+            content_key += key.buildProperty()
+            content_key += key.buildConstructor()
+
+        content += properties + content_key + getters + setters
 
         content += self.buildFooter(table)
 
@@ -131,6 +146,8 @@ class ForeignKey:
         self.table = foreign_key.columns[0].owner.name
         self.origin_table = foreign_key.referencedTable.name
         self.origin_columns = [column.name for column in foreign_key.referencedColumns]
+        self.type = ''
+        self.setType()
 
     def getLocals(self):
         return self.columns
@@ -144,9 +161,21 @@ class ForeignKey:
     def getName(self):
         return self.name
 
+    def setType(self):
+        ref_columns = len(self.foreign_key.referencedColumns)
+        if self.foreign_key.many == 1:
+            if ref_columns > 1:
+                self.type = 'ManyToMany'
+            else:
+                self.type = 'ManyToOne'
+        elif ref_columns > 1:
+            self.type = 'OneToMany'
+        else:
+            self.type = 'OneToOne'
+
     def buildAnnotation(self):
         annotations = []
-        annotations += [a_.get('ManyToOne', {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table),'inversedBy': self.table + 's'})]
+        annotations += [a_.get(self.type, {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table),'inversedBy': self.table + 's'})]
         annotations += [a_.get('JoinColumn', {'name': self.columns[0], 'referencedColumnName': self.origin_columns[0]})]
         return annotations
 
@@ -159,6 +188,7 @@ class Table:
         self.columns = []
         self.indexes = []
         self.primaries = []
+        self.inverted = []
         self.foreigns = {}
         self._initForeigns()
         self._initIndexes()
@@ -191,6 +221,16 @@ class Table:
     def getIndexes(self):
         return self.indexes
 
+    def addInverted(self, key):
+        if key.many_to_one:
+            self.inverted.append(InvertedKey(key))
+
+    def getForeignsKey(self):
+        return self.foreigns
+
+    def getInvertedKeys(self):
+        return self.inverted
+
 
 class Index:
     def __init__(self, index):
@@ -215,6 +255,34 @@ class Index:
             "name": self.name,
             "columns": self.getColumns()
         })
+
+
+class InvertedKey:
+    def __init__(self, key):
+        self.foreign = key
+        self.property = ""
+
+    def buildAnnotations(self):
+        annotations = [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table),'mapped_by': self.foreign.origin_table + ''})]
+        commentary = Comment(annotations)
+        return commentary.build()
+
+    def buildProperty(self):
+        prop = self.foreign.table.lower()
+        long = len(prop)
+        if prop.endswith('y'):
+            prop = prop[0:long-4] + 'ies'
+        else:
+            prop = prop[0:long] + 's'
+        self.property = prop
+        return "    protected $" + prop + ";\n\n"
+
+    def buildConstructor(self):
+        result = "    public function __construct()\n"
+        result += "    {\n"
+        result += "        $this->" + self.property + " = new ArrayCollection();\n"
+        result += "    }\n\n"
+        return result
 
 
 class Column:
@@ -395,12 +463,8 @@ class Column:
 
     def getProperty(self):
         if self.is_foreign:
-            end = self.name[-4:]
-            long = len(self.name) - 4
-            if end[0] == 'y':
-                final_name = self.name[0:long] + 'ies'
-            else:
-                final_name = self.name[0:long+1] + 's'
+            long = len(self.name) - 3
+            final_name = self.name[0:long]
         else:
             final_name = self.name
         return "    protected $" + final_name + ";\n"
