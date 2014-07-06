@@ -9,8 +9,6 @@ import grt
 import mforms
 
 
-
-
 """
 Classe permettant de manipuler le schema de la base de données
 """
@@ -20,19 +18,26 @@ class Schema:
         self.tables = schema.tables
         self.basepath = basepath
         self.namespace = namespace
+        self.dico_table = {}
+        self._initDico()
+
+    def _initDico(self):
+        for table in self.tables:
+            self.dico_table[table.name] = Table(table, self.namespace)
+        for table in self.dico_table.values():
+            for key in table.getForeignsKey().values():
+                if key.many_to_one:
+                    self.dico_table[key.origin_table].addInverted(key)
 
     def processing(self):
         try:
-            for table in self.tables:
-                tab = Table(table)
-                content = self.buildClass(tab)
-                self.write(content, tab)
-
+            for table in self.dico_table.values():
+                content = self.buildClass(table)
+                self.write(content, table)
             return True
         except:
             mforms.Utilities.show_error("", "Unexpected error : " + sys.exc_info()[0], "OK", "", "")
             return False
-
 
     """
     Ecrit le contenu de la classe dans un fichier
@@ -46,13 +51,14 @@ class Schema:
         file.write(content)
         file.close()
 
-
     """
     Contruction de la classe pour la table passée en argument
     """
     def buildClass(self, table):
         content = ""
         properties = ""
+        content_key = ""
+        constructor = ""
         getters = ""
         setters = ""
         to_string = ""
@@ -65,12 +71,24 @@ class Schema:
             setters += self.buildSetter(column)
             to_string += column.getToString()
 
-        content += properties + to_string + getters + setters
+        for key in table.getInvertedKeys():
+            content_key += key.buildAnnotations()
+            content_key += key.buildProperty()
+            constructor += key.buildConstructor()
+
+        if constructor != "":
+            content_constructor = constructor
+            constructor  = Comment(["Constructor of the " + underscoreToCamelcase(table.name) + " class"]).build()
+            constructor += "    public function __construct()\n"
+            constructor += "    {\n"
+            constructor += "{0}\n".format(content_constructor)
+            constructor += "    }\n\n"
+
+        content += properties + content_key + constructor + to_string + getters + setters
 
         content += self.buildFooter(table)
 
         return content
-
 
     """
     Contruction du header de la classe pour la table passée en argument
@@ -79,15 +97,18 @@ class Schema:
         content = "<?php\n\n"
         content += "namespace {0};\n\n".format(self.namespace)
         content += "use Doctrine\ORM\Mapping as ORM;\n"
-        content += "use Symfony\Component\Validator\Constraints as Assert;\n\n"
+        content += "use Symfony\Component\Validator\Constraints as Assert;\n"
+        if table.hasInvertedKeys():
+            content += "use Doctrine\Common\Collections\ArrayCollection;\n"
+        content += "\n"
 
         commentary = Comment([
             underscoreToCamelcase(table.name),
             "",
             a_.get("Table", {
                 "name": table.name,
-                "indexes": [ index.toAnnotation("Index") for index in table.getIndexes() if index.isIndex() ],
-                "uniqueConstraints": [ index.toAnnotation("UniqueConstraint") for index in table.getIndexes() if index.isUnique() ],
+                "indexes": [index.toAnnotation("Index") for index in table.getIndexes() if index.isIndex()],
+                "uniqueConstraints": [index.toAnnotation("UniqueConstraint") for index in table.getIndexes() if index.isUnique()],
             }),
             a_.get("Entity")
         ], "")
@@ -98,13 +119,11 @@ class Schema:
 
         return content
 
-
     """
     Contruction du footer de la classe pour la table passée en argument
     """
     def buildFooter(self, table):
         return "\n}"
-
 
     """
     Contruction de la variable pour la colonne passée en argument
@@ -119,7 +138,6 @@ class Schema:
     def buildGetter(self, column):
         return column.getGetter() + "\n"
 
-
     """
     Contruction du setter pour la colonne passée en argument
     """
@@ -127,13 +145,61 @@ class Schema:
         return column.getSetter() + "\n"
 
 
+class ForeignKey:
+    def __init__(self, foreign_key, namespace):
+        self.foreign_key = foreign_key
+        self.namespace = namespace
+        self.name = foreign_key.columns[0].name
+        self.many_to_one = (foreign_key.many == 1)
+        self.columns = [column.name for column in foreign_key.columns]
+        self.table = foreign_key.columns[0].owner.name
+        self.origin_table = foreign_key.referencedTable.name
+        self.origin_columns = [column.name for column in foreign_key.referencedColumns]
+        self.type = ''
+        self.setType()
+
+    def getLocals(self):
+        return self.columns
+
+    def getForeigns(self):
+        return [{'table': self.origin_table, 'column': column} for column in self.origin_columns]
+
+    def isManyToOne(self):
+        return self.many_to_one
+
+    def getName(self):
+        return self.name
+
+    def setType(self):
+        ref_columns = len(self.foreign_key.referencedColumns)
+        if self.foreign_key.many == 1:
+            if ref_columns > 1:
+                self.type = 'ManyToMany'
+            else:
+                self.type = 'ManyToOne'
+        elif ref_columns > 1:
+            self.type = 'OneToMany'
+        else:
+            self.type = 'OneToOne'
+
+    def buildAnnotation(self):
+        annotations = []
+        annotations += [a_.get(self.type, {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table),'inversedBy': self.table + 's'})]
+        annotations += [a_.get('JoinColumn', {'name': self.columns[0], 'referencedColumnName': self.origin_columns[0]})]
+        return annotations
+
+
 class Table:
-    def __init__(self, table):
+    def __init__(self, table, namespace):
         self.table = table
         self.name = table.name
+        self.namespace = namespace
         self.columns = []
         self.indexes = []
         self.primaries = []
+        self.inverted = []
+        self.foreigns = {}
+        self._initForeigns()
         self._initIndexes()
         self._initColumns()
 
@@ -149,7 +215,14 @@ class Table:
             col = Column(column)
             if column.name in self.primaries:
                 col.markAsPrimary()
+            if column.name in self.foreigns:
+                col.markAsForeign(self.foreigns[column.name])
             self.columns += [col]
+
+    def _initForeigns(self):
+        for key in self.table.foreignKeys:
+            fks = ForeignKey(key, self.namespace)
+            self.foreigns[key.columns[0].name] = fks
 
     def getColumns(self):
         return self.columns
@@ -157,6 +230,18 @@ class Table:
     def getIndexes(self):
         return self.indexes
 
+    def addInverted(self, key):
+        if key.many_to_one:
+            self.inverted.append(InvertedKey(key))
+
+    def getForeignsKey(self):
+        return self.foreigns
+
+    def getInvertedKeys(self):
+        return self.inverted
+
+    def hasInvertedKeys(self):
+        return len(self.inverted) > 0
 
 
 class Index:
@@ -184,6 +269,30 @@ class Index:
         })
 
 
+class InvertedKey:
+    def __init__(self, key):
+        self.foreign = key
+        self.property = ""
+
+    def buildAnnotations(self):
+        annotations = [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table),'mapped_by': self.foreign.origin_table + ''})]
+        commentary = Comment(annotations)
+        return commentary.build()
+
+    def buildProperty(self):
+        prop = self.foreign.table.lower()
+        long = len(prop)
+        if prop.endswith('y'):
+            prop = prop[0:long-4] + 'ies'
+        else:
+            prop = prop[0:long] + 's'
+        self.property = prop
+        return "    protected $" + prop + ";\n\n"
+
+    def buildConstructor(self):
+        return "        $this->" + self.property + " = new ArrayCollection();\n"
+
+
 class Column:
     def __init__(self, column):
         self.column = column
@@ -191,6 +300,8 @@ class Column:
         self.type = column.simpleType if column.simpleType else column.userType
         self.flags = column.flags
         self.is_primary = False
+        self.is_foreign = False
+        self.foreign_key = None
         self.doctrine_types = {
             "TINYINT": "integer",
             "SMALLINT": "integer",
@@ -302,7 +413,6 @@ class Column:
             "CHARACTER": "string"
         }
 
-
     def _getDoctrineType(self):
         return self.doctrine_types.get(self.type.name, "string")
 
@@ -312,10 +422,8 @@ class Column:
     def _isUnsigned(self):
         return "UNSIGNED" in self.column.flags
 
-
     def _isAutoIncrement(self):
         return self.column.autoIncrement == 1
-
 
     def _isNotNull(self):
         return self.column.isNotNull == 1
@@ -332,14 +440,16 @@ class Column:
     def markAsPrimary(self):
         self.is_primary = True
 
+    def markAsForeign(self, foreign_key):
+        self.is_foreign = True
+        self.foreign_key = foreign_key
+
     def getAnnotations(self):
         annotations = []
 
         if self.is_primary:
             annotations += [a_.get("Id")]
-
-        def_column = {}
-        def_column["type"] = self._getDoctrineType()
+        def_column = {"type": self._getDoctrineType()}
         if self._getLength():
             def_column["length"] = int(self._getLength())
         if self._isUnsigned():
@@ -353,12 +463,19 @@ class Column:
 
         if self._isAutoIncrement():
             annotations += [a_.get("GeneratedValue", {"strategy": "auto"})]
+        if self.is_foreign:
+            annotations = self.foreign_key.buildAnnotation()
 
         commentary = Comment(annotations)
         return commentary.build()
 
     def getProperty(self):
-        return "    protected $" + self.name + ";\n"
+        if self.is_foreign:
+            long = len(self.name) - 3
+            final_name = self.name[0:long]
+        else:
+            final_name = self.name
+        return "    protected $" + final_name + ";\n"
 
     def getGetter(self):
         commentary = Comment(["Get the value of " + self.name, "@return " + self._getPhpType()])
@@ -367,7 +484,6 @@ class Column:
         result += "    {\n"
         result += "        return $this->" + self.name + ";\n"
         result += "    }\n\n"
-
         return result
 
     def getSetter(self):
@@ -378,7 +494,6 @@ class Column:
         result += "        $this->" + self.name + " = $" + self.name + ";\n"
         result += "        return $this;\n"
         result += "    }\n\n"
-
         return result
 
     def getToString(self):
@@ -395,14 +510,12 @@ class Column:
         return result
 
 
-
 """
 Classe permettant de générer des annotations
 """
 class Annotation:
     def __init__(self):
         self.prefix = "@ORM\\"
-
 
     def get(self, name, value = None):
         def buildDict(datas):
@@ -428,7 +541,6 @@ class Annotation:
         return annotation
 
 
-
 """
 Classe permettant de générer des commentaires
 """
@@ -447,7 +559,6 @@ class Comment:
 
     def get(self, text, content = True):
         return self.prefix + (" * " if content else "") + text + self.eol
-
 
 
 """
@@ -473,6 +584,7 @@ def underscoreToCamelcase(value):
 #
 #################################################
 a_ = Annotation()
+
 
 ModuleInfo = DefineModule(name="Doctrine Annotation", author="Simon Leblanc", version="1.0", description="Contains Plugin Doctrine")
 
