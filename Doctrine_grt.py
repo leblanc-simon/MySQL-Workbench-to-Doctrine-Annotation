@@ -417,7 +417,9 @@ class Column:
         return self.doctrine_types.get(self.type.name, "string")
 
     def _getPhpType(self):
-        return self.php_types.get(self.type.name, "string")
+        if self.is_foreign == False:
+            return self.php_types.get(self.type.name, "string")
+        return underscoreToCamelcase(self.foreign_key.origin_table)
 
     def _isUnsigned(self):
         return "UNSIGNED" in self.column.flags
@@ -436,6 +438,15 @@ class Column:
 
     def _getParameters(self):
         return self.column.datatypeExplicitParams if self.column.datatypeExplicitParams else None
+
+    def _getFinalName(self):
+        if self.is_foreign:
+            # Remove "_id"
+            long = len(self.name) - 3
+            final_name = self.name[0:long]
+        else:
+            final_name = self.name
+        return final_name
 
     def markAsPrimary(self):
         self.is_primary = True
@@ -470,28 +481,23 @@ class Column:
         return commentary.build()
 
     def getProperty(self):
-        if self.is_foreign:
-            long = len(self.name) - 3
-            final_name = self.name[0:long]
-        else:
-            final_name = self.name
-        return "    protected $" + final_name + ";\n"
+        return "    protected $" + self._getFinalName() + ";\n"
 
     def getGetter(self):
-        commentary = Comment(["Get the value of " + self.name, "@return " + self._getPhpType()])
+        commentary = Comment(["Get the value of " + self._getFinalName(), "@return " + self._getPhpType()])
         result = commentary.build()
-        result += "    public function get" + underscoreToCamelcase(self.name) + "()\n"
+        result += "    public function get" + underscoreToCamelcase(self._getFinalName()) + "()\n"
         result += "    {\n"
-        result += "        return $this->" + self.name + ";\n"
+        result += "        return $this->" + self._getFinalName() + ";\n"
         result += "    }\n\n"
         return result
 
     def getSetter(self):
-        commentary = Comment(["Set the value of " + self.name, "@param " + self._getPhpType() + " $" + self.name, "@return self"])
+        commentary = Comment(["Set the value of " + self._getFinalName(), "@param " + self._getPhpType() + " $" + self._getFinalName(), "@return self"])
         result = commentary.build()
-        result += "    public function set" + underscoreToCamelcase(self.name) + "($" + self.name + ")\n"
+        result += "    public function set" + underscoreToCamelcase(self._getFinalName()) + "($" + self._getFinalName() + ")\n"
         result += "    {\n"
-        result += "        $this->" + self.name + " = $" + self.name + ";\n"
+        result += "        $this->" + self._getFinalName() + " = $" + self._getFinalName() + ";\n"
         result += "        return $this;\n"
         result += "    }\n\n"
         return result
