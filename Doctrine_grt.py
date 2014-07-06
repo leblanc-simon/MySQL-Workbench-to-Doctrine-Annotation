@@ -81,7 +81,7 @@ class Schema:
             constructor  = Comment(["Constructor of the " + underscoreToCamelcase(table.name) + " class"]).build()
             constructor += "    public function __construct()\n"
             constructor += "    {\n"
-            constructor += "{0}\n".format(content_constructor)
+            constructor += "{0}".format(content_constructor)
             constructor += "    }\n\n"
 
         content += properties + content_key + constructor + to_string + getters + setters
