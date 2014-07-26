@@ -603,7 +603,7 @@ class Annotation:
             def quoted(value):
                 if isinstance(value, bool):
                     return "true" if value else "false"
-                elif isinstance(value, str) and value[0:len(self.prefix)] != self.prefix:
+                elif isinstance(value, basestring) and value[0:len(self.prefix)] != self.prefix:
                     return '"' + value + '"'
                 elif isinstance(value, dict):
                     return "{" + buildDict(value) + "}"
