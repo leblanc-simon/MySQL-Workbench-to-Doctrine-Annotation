@@ -531,19 +531,19 @@ class Column:
         if self._getLength():
             annotations += [a_.get("Length", {"min": 0, "max": self._getLength()})]
         if self._isNotNull() and self._getPhpType() != "string":
-            annotations += [a_.get("NotNull")]
+            annotations += [a_.get("NotNull", {})]
         if self._isNotNull() and self._getPhpType() == "string":
-            annotations += [a_.get("NotBlank")]
+            annotations += [a_.get("NotBlank", {})]
         if self._isUnsigned():
             annotations += [a_.get("GreaterThan", {"value": 0})]
         if self.name == "email":
-            annotations += [a_.get("Email")]
+            annotations += [a_.get("Email", {})]
         if self._getPhpType() == "int" or self._getPhpType() == "float":
             annotations += [a_.get("Type", {"type": "numeric"})]
         if self._getPhpType() == "string":
             annotations += [a_.get("Type", {"type": "string"})]
         if self._getPhpType() == "\DateTime":
-            annotations += [a_.get("DateTime")]
+            annotations += [a_.get("DateTime", {})]
 
         a_.resetPrefix()
         return annotations
