@@ -197,6 +197,7 @@ class Table:
         self.columns = []
         self.indexes = []
         self.primaries = []
+        self.uniques = []
         self.inverted = []
         self.foreigns = {}
         self._initForeigns()
@@ -208,6 +209,8 @@ class Table:
             idx = Index(index)
             if idx.isPrimary():
                 self.primaries += idx.getColumns()
+            elif idx.isUnique():
+                self.uniques += idx.getColumns()
             self.indexes += [idx]
 
     def _initColumns(self):
@@ -215,6 +218,8 @@ class Table:
             col = Column(column)
             if column.name in self.primaries:
                 col.markAsPrimary()
+            if column.name in self.uniques:
+                col.markAsUnique()
             if column.name in self.foreigns:
                 col.markAsForeign(self.foreigns[column.name])
             self.columns += [col]
@@ -300,6 +305,7 @@ class Column:
         self.type = column.simpleType if column.simpleType else column.userType
         self.flags = column.flags
         self.is_primary = False
+        self.is_unique = False
         self.is_foreign = False
         self.foreign_key = None
         self.doctrine_types = {
@@ -451,6 +457,9 @@ class Column:
     def markAsPrimary(self):
         self.is_primary = True
 
+    def markAsUnique(self):
+        self.is_unique = True
+
     def markAsForeign(self, foreign_key):
         self.is_foreign = True
         self.foreign_key = foreign_key
@@ -465,6 +474,8 @@ class Column:
             def_column["length"] = int(self._getLength())
         if not self._isNotNull():
             def_column["nullable"] = True
+        if self.is_unique:
+            def_column["unique"] = True
         if self._getPrecision():
             def_column["precision"] = self._getPrecision()
         if self._isUnsigned():
@@ -473,12 +484,43 @@ class Column:
         annotations += [a_.get("Column", def_column)]
 
         if self._isAutoIncrement():
-            annotations += [a_.get("GeneratedValue", {"strategy": "auto"})]
+            annotations += [a_.get("GeneratedValue", {"strategy": "AUTO"})]
+
+        annotations += self.getAssertAnnotation()
+
         if self.is_foreign:
             annotations = self.foreign_key.buildAnnotation()
 
         commentary = Comment(annotations)
         return commentary.build()
+
+    def getAssertAnnotation(self):
+        annotations = []
+
+        if self.is_primary:
+            return annotations
+
+        a_.setPrefix("@Assert\\")
+
+        if self._getLength():
+            annotations += [a_.get("Length", {"min": 0, "max": self._getLength()})]
+        if self._isNotNull() and self._getPhpType() != "string":
+            annotations += [a_.get("NotNull")]
+        if self._isNotNull() and self._getPhpType() == "string":
+            annotations += [a_.get("NotBlank")]
+        if self._isUnsigned():
+            annotations += [a_.get("GreaterThan", {"value": 0})]
+        if self.name == "email":
+            annotations += [a_.get("Email")]
+        if self._getPhpType() == "int" or self._getPhpType() == "float":
+            annotations += [a_.get("Type", {"type": "numeric"})]
+        if self._getPhpType() == "string":
+            annotations += [a_.get("Type", {"type": "string"})]
+        if self._getPhpType() == "\DateTime":
+            annotations += [a_.get("DateTime")]
+
+        a_.resetPrefix()
+        return annotations
 
     def getProperty(self):
         return "    protected $" + self._getFinalName() + ";\n"
@@ -521,7 +563,14 @@ Classe permettant de générer des annotations
 """
 class Annotation:
     def __init__(self):
-        self.prefix = "@ORM\\"
+        self._default_prefix = "@ORM\\"
+        self.prefix = self._default_prefix
+
+    def setPrefix(self, prefix):
+        self.prefix = prefix
+
+    def resetPrefix(self):
+        self.prefix = self._default_prefix
 
     def get(self, name, value = None):
         def buildDict(datas):
