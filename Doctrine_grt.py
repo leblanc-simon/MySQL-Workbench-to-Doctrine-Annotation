@@ -463,7 +463,7 @@ class Column:
         def_column = {"type": self._getDoctrineType()}
         if self._getLength():
             def_column["length"] = int(self._getLength())
-        if self._isUnsigned():
+        if not self._isNotNull():
             def_column["nullable"] = True
         if self._getPrecision():
             def_column["precision"] = self._getPrecision()
