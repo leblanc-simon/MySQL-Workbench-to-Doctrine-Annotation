@@ -70,6 +70,8 @@ class Schema:
             getters += self.buildGetter(column)
             setters += self.buildSetter(column)
             to_string += column.getToString()
+            if column.hasDefaultValue():
+                constructor += column.getConstructor()
 
         for key in table.getInvertedKeys():
             content_key += key.buildAnnotations()
@@ -463,6 +465,30 @@ class Column:
     def markAsForeign(self, foreign_key):
         self.is_foreign = True
         self.foreign_key = foreign_key
+
+    def hasDefaultValue(self):
+        if self.column.defaultValueIsNull == 1:
+            return True
+        if self.column.defaultValue != "":
+            return True
+        return False
+
+    def getDefaultValue(self):
+        if self.column.defaultValueIsNull == 1:
+            return "null"
+        if self._getPhpType() == "bool":
+            if self.column.defaultValue == "1":
+                return "true"
+            else:
+                return "false"
+        if self._getPhpType() == "string":
+            return "\"" + self.column.defaultValue + "\""
+        if self._getPhpType() == "\DateTime":
+            return "new \DateTime(\"" + self.column.defaultValue + "\")"
+        return self.column.defaultValue
+
+    def getConstructor(self):
+        return "        $this->" + self._getFinalName() + " = " + self.getDefaultValue() + ";\n"
 
     def getAnnotations(self):
         annotations = []
