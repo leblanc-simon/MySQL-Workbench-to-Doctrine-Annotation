@@ -3,6 +3,8 @@
 import re
 import os
 import sys
+import codecs
+import string
 
 from wb import *
 import grt
@@ -47,7 +49,7 @@ class Schema:
             os.makedirs(self.basepath)
 
         filename = os.path.join(self.basepath, underscoreToCamelcase(table.name) + ".php")
-        file = open(filename, "w")
+        file = codecs.open(filename, "w", "utf-8")
         file.write(content)
         file.close()
 
@@ -55,6 +57,11 @@ class Schema:
     Contruction de la classe pour la table passée en argument
     """
     def buildClass(self, table):
+        def convertStr(data):
+            if isinstance(data, str):
+                return unicode(data, "utf-8")
+            return data
+
         content = ""
         properties = ""
         content_key = ""
@@ -77,6 +84,9 @@ class Schema:
             content_key += key.buildAnnotations()
             content_key += key.buildProperty()
             constructor += key.buildConstructor()
+            setters     += key.buildSetter()
+            setters     += key.buildAdder()
+            getters     += key.buildGetter()
 
         if constructor != "":
             content_constructor = constructor
@@ -86,11 +96,14 @@ class Schema:
             constructor += "{0}".format(content_constructor)
             constructor += "    }\n\n"
 
-        content += properties + content_key + constructor + to_string + getters + setters
+        content += convertStr(properties) + convertStr(content_key) + convertStr(constructor)
+        content += convertStr(to_string) + convertStr(getters) + convertStr(setters)
 
-        content += self.buildFooter(table)
+        content = content.strip(string.whitespace)
 
-        return content
+        content += convertStr(self.buildFooter(table))
+
+        return content.strip(string.whitespace)
 
     """
     Contruction du header de la classe pour la table passée en argument
@@ -102,6 +115,8 @@ class Schema:
         content += "use Symfony\Component\Validator\Constraints as Assert;\n"
         if table.hasInvertedKeys():
             content += "use Doctrine\Common\Collections\ArrayCollection;\n"
+            for inverted_key in table.getInvertedKeys():
+                content += inverted_key.getUse()
         content += "\n"
 
         commentary = Comment([
@@ -186,7 +201,7 @@ class ForeignKey:
 
     def buildAnnotation(self):
         annotations = []
-        annotations += [a_.get(self.type, {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table),'inversedBy': self.table + 's'})]
+        annotations += [a_.get(self.type, {'targetEntity': self.namespace + '\\' + underscoreToCamelcase(self.origin_table), 'inversedBy': toPlural(self.table)})]
         annotations += [a_.get('JoinColumn', {'name': self.columns[0], 'referencedColumnName': self.origin_columns[0]})]
         return annotations
 
@@ -282,19 +297,49 @@ class InvertedKey:
         self.property = ""
 
     def buildAnnotations(self):
-        annotations = [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table),'mapped_by': self.foreign.origin_table + ''})]
+        annotations = ["@var ArrayCollection"]
+        annotations += [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table), 'mapped_by': self.foreign.origin_table + ''})]
         commentary = Comment(annotations)
         return commentary.build()
 
+    def buildSetter(self):
+        annotations = ["Set the value of " + self.property, "@param  ArrayCollection     $" + self.property, "@return self"]
+        commentary = Comment(annotations)
+        setter = commentary.build()
+        setter += "    public function set" + underscoreToCamelcase(self.property) + "($" + self.property + ")\n"
+        setter += "    {\n"
+        setter += "        $this->" + self.property + " = $" + self.property + ";\n"
+        setter += "        return $this;\n"
+        setter += "    }\n\n\n"
+        return setter
+
+    def buildAdder(self):
+        table = self.foreign.table
+        annotations = ["@param  " + underscoreToCamelcase(table) + "     $" + table, "@return self"]
+        commentary = Comment(annotations)
+        adder = commentary.build()
+        adder += "    public function add" + underscoreToCamelcase(table) + "(" + underscoreToCamelcase(table) + "$" + table + ")\n"
+        adder += "    {\n"
+        adder += "        $this->" + self.property + "->add($" + table + ");\n"
+        adder += "        return $this;\n"
+        adder += "    }\n\n\n"
+        return adder
+
+    def buildGetter(self):
+        commentary = Comment(["Get the value of " + self.property, "@return ArrayCollection"])
+        getter = commentary.build()
+        getter += "    public function get" + underscoreToCamelcase(self.property) + "()\n"
+        getter += "    {\n"
+        getter += "        return $this->" + self.property + ";\n"
+        getter += "    }\n\n\n"
+        return getter
+
+    def getUse(self):
+        return "use " + self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table) + ";\n";
+
     def buildProperty(self):
-        prop = self.foreign.table.lower()
-        long = len(prop)
-        if prop.endswith('y'):
-            prop = prop[0:long-4] + 'ies'
-        else:
-            prop = prop[0:long] + 's'
-        self.property = prop
-        return "    protected $" + prop + ";\n\n"
+        self.property = toPlural(self.foreign.table)
+        return "    protected $" + self.property + ";\n\n"
 
     def buildConstructor(self):
         return "        $this->" + self.property + " = new ArrayCollection();\n"
@@ -482,7 +527,11 @@ class Column:
             else:
                 return "false"
         if self._getPhpType() == "string":
-            return "\"" + self.column.defaultValue + "\""
+            default_value = self.column.defaultValue
+            default_value = re.sub("^'", "", default_value)
+            default_value = re.sub("'$", "", default_value)
+            default_value = default_value.replace("'", "\\'")
+            return "'" + default_value + "'"
         if self._getPhpType() == "\DateTime":
             return "new \DateTime(\"" + self.column.defaultValue + "\")"
         return self.column.defaultValue
@@ -492,6 +541,12 @@ class Column:
 
     def getAnnotations(self):
         annotations = []
+
+        if self.column.comment != "":
+            annotations += [self.column.comment]
+            annotations += [""]
+
+        annotations += ["@var " + self._getPhpType()]
 
         if self.is_primary:
             annotations += [a_.get("Id")]
@@ -535,7 +590,7 @@ class Column:
         if self._isNotNull() and self._getPhpType() == "string":
             annotations += [a_.get("NotBlank", {})]
         if self._isUnsigned():
-            annotations += [a_.get("GreaterThan", {"value": 0})]
+            annotations += [a_.get("GreaterThanOrEqual", {"value": 0})]
         if self.name == "email":
             annotations += [a_.get("Email", {})]
         if self._getPhpType() == "int" or self._getPhpType() == "float":
@@ -657,6 +712,18 @@ def underscoreToCamelcase(value):
     c = camelcase()
     result = "".join(c.next()(x) if x else '_' for x in value.split("_"))
     return result[0].upper() + result[1:]
+
+"""
+Retourne une chaine convertie au pluriel
+
+:param:     string  value   La chaine au singulier
+:return:    string          La chaine au pluriel
+"""
+def toPlural(value):
+    if value[-1] != "y":
+        return value + "s"
+
+    return value[0:-1] + "ies"
 
 
 #################################################
