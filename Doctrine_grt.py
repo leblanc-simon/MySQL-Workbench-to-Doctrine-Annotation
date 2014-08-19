@@ -318,7 +318,7 @@ class InvertedKey:
         annotations = ["@param  " + underscoreToCamelcase(table) + "     $" + table, "@return self"]
         commentary = Comment(annotations)
         adder = commentary.build()
-        adder += "    public function add" + underscoreToCamelcase(table) + "(" + underscoreToCamelcase(table) + "$" + table + ")\n"
+        adder += "    public function add" + underscoreToCamelcase(table) + "(" + underscoreToCamelcase(table) + " $" + table + ")\n"
         adder += "    {\n"
         adder += "        $this->" + self.property + "->add($" + table + ");\n"
         adder += "        return $this;\n"
