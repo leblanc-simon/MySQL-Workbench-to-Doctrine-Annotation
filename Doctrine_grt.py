@@ -298,7 +298,7 @@ class InvertedKey:
 
     def buildAnnotations(self):
         annotations = ["@var ArrayCollection"]
-        annotations += [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table), 'mapped_by': self.foreign.origin_table + ''})]
+        annotations += [a_.get('OneToMany', {'targetEntity': self.foreign.namespace + '\\' + underscoreToCamelcase(self.foreign.table), 'mappedBy': self.foreign.origin_table + ''})]
         commentary = Comment(annotations)
         return commentary.build()
 
