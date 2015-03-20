@@ -73,7 +73,7 @@ class Schema:
         content += self.buildHeader(table)
 
         for column in table.getColumns():
-            properties += self.buildProperties(column)
+            properties += convertStr(self.buildProperties(column))
             getters += self.buildGetter(column)
             setters += self.buildSetter(column)
             to_string += column.getToString()
@@ -99,6 +99,9 @@ class Schema:
         content += convertStr(properties) + convertStr(content_key) + convertStr(constructor)
         content += convertStr(to_string) + convertStr(getters) + convertStr(setters)
 
+        if table.hasTimestamps == True:
+            content += convertStr(self.buildTimestamps(table))
+
         content = content.strip(string.whitespace)
 
         content += convertStr(self.buildFooter(table))
@@ -119,7 +122,7 @@ class Schema:
                 content += inverted_key.getUse()
         content += "\n"
 
-        commentary = Comment([
+        header_comment = [
             underscoreToCamelcase(table.name),
             "",
             a_.get("Table", {
@@ -128,7 +131,12 @@ class Schema:
                 "uniqueConstraints": [index.toAnnotation("UniqueConstraint") for index in table.getIndexes() if index.isUnique()],
             }),
             a_.get("Entity")
-        ], "")
+        ]
+
+        if table.hasTimestamps == True:
+            header_comment += [a_.get("HasLifecycleCallbacks")]
+
+        commentary = Comment(header_comment, "")
 
         content += commentary.build()
         content +=  "class {0}\n".format(underscoreToCamelcase(table.name))
@@ -160,6 +168,17 @@ class Schema:
     """
     def buildSetter(self, column):
         return column.getSetter() + "\n"
+
+    def buildTimestamps(self, table):
+        timestamps  = Comment([a_.get("PrePersist"), a_.get("PreUpdate")]).build()
+        timestamps += "    public function updatedTimestamps()\n"
+        timestamps += "    {\n"
+        timestamps += "        $this->setUpdatedAt(new \DateTime());\n"
+        timestamps += "        if ($this->getCreatedAt() === null) {\n"
+        timestamps += "            $this->setCreatedAt(new \DateTime());\n"
+        timestamps += "        }\n"
+        timestamps += "    }\n\n"
+        return timestamps
 
 
 class ForeignKey:
@@ -217,6 +236,7 @@ class Table:
         self.uniques = []
         self.inverted = []
         self.foreigns = {}
+        self.hasTimestamps = False
         self._initForeigns()
         self._initIndexes()
         self._initColumns()
@@ -239,6 +259,8 @@ class Table:
                 col.markAsUnique()
             if column.name in self.foreigns:
                 col.markAsForeign(self.foreigns[column.name])
+            if column.name == 'created_at' or column.name == 'updated_at':
+                self.hasTimestamps = True
             self.columns += [col]
 
     def _initForeigns(self):
