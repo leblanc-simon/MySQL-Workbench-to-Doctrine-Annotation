@@ -86,6 +86,7 @@ class Schema:
             constructor += key.buildConstructor()
             setters     += key.buildSetter()
             setters     += key.buildAdder()
+            setters     += key.buildRemover()
             getters     += key.buildGetter()
 
         if constructor != "":
@@ -328,7 +329,7 @@ class InvertedKey:
         annotations = ["Set the value of " + self.property, "@param  ArrayCollection     $" + self.property, "@return self"]
         commentary = Comment(annotations)
         setter = commentary.build()
-        setter += "    public function set" + underscoreToCamelcase(self.property) + "($" + self.property + ")\n"
+        setter += "    public function set" + underscoreToCamelcase(self.property) + "(ArrayCollection $" + self.property + ")\n"
         setter += "    {\n"
         setter += "        $this->" + self.property + " = $" + self.property + ";\n"
         setter += "        return $this;\n"
@@ -337,18 +338,36 @@ class InvertedKey:
 
     def buildAdder(self):
         table = self.foreign.table
-        annotations = ["@param  " + underscoreToCamelcase(table) + "     $" + table, "@return self"]
+        annotations = ["Add a " + underscoreToCamelcase(table) + " into " + underscoreToCamelcase(self.foreign.origin_table), "@param  " + underscoreToCamelcase(table) + "     $" + table, "@return self"]
         commentary = Comment(annotations)
         adder = commentary.build()
         adder += "    public function add" + underscoreToCamelcase(table) + "(" + underscoreToCamelcase(table) + " $" + table + ")\n"
         adder += "    {\n"
-        adder += "        $this->" + self.property + "->add($" + table + ");\n"
+        adder += "        if ($this->" + self.property + "->contains($" + table + ") === false) {\n"
+        adder += "            $this->" + self.property + "->add($" + table + ");\n"
+        adder += "            $" + table + "->set" + underscoreToCamelcase(self.foreign.origin_table) + "($this);\n"
+        adder += "        }\n"
+        adder += "        return $this;\n"
+        adder += "    }\n\n\n"
+        return adder
+
+    def buildRemover(self):
+        table = self.foreign.table
+        annotations = ["Remove a " + underscoreToCamelcase(table) + " into " + underscoreToCamelcase(self.foreign.origin_table), "@param  " + underscoreToCamelcase(table) + "     $" + table, "@return self"]
+        commentary = Comment(annotations)
+        adder = commentary.build()
+        adder += "    public function remove" + underscoreToCamelcase(table) + "(" + underscoreToCamelcase(table) + " $" + table + ")\n"
+        adder += "    {\n"
+        adder += "        if ($this->" + self.property + "->contains($" + table + ") === true) {\n"
+        adder += "            $this->" + self.property + "->remove($" + table + ");\n"
+        adder += "            $" + table + "->set" + underscoreToCamelcase(self.foreign.origin_table) + "(null);\n"
+        adder += "        }\n"
         adder += "        return $this;\n"
         adder += "    }\n\n\n"
         return adder
 
     def buildGetter(self):
-        commentary = Comment(["Get the value of " + self.property, "@return ArrayCollection"])
+        commentary = Comment(["Get the value of " + self.property, "@return " + underscoreToCamelcase(self.property) + "[]"])
         getter = commentary.build()
         getter += "    public function get" + underscoreToCamelcase(self.property) + "()\n"
         getter += "    {\n"
@@ -768,7 +787,7 @@ ModuleInfo = DefineModule(name="Doctrine Annotation", author="Simon Leblanc", ve
 )
 @ModuleInfo.export(grt.INT, grt.classes.db_Catalog)
 def Doctrine(catalog):
-    ret, namespace = mforms.Utilities.request_input("Namespace", "Set the namespace to use in the entities", "Portailpro\Bundle\Entity")
+    ret, namespace = mforms.Utilities.request_input("Namespace", "Set the namespace to use in the entities", "AppBundle\Entity")
     if not ret:
         return 0
 
